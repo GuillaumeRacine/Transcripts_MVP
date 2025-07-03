@@ -1,0 +1,12 @@
+# Core dependencies only
+google-api-python-client
+youtube-transcript-api
+openai
+anthropic
+notion-client
+schedule
+sqlalchemy
+python-dotenv
+pydantic
+pydantic-settings
+requests

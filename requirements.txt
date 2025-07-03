@@ -1,0 +1,35 @@
+# YouTube API and transcript extraction
+google-api-python-client==2.127.0
+youtube-transcript-api==0.6.2
+
+# LLM integration
+openai==1.35.3
+anthropic==0.29.0
+langchain==0.2.5
+
+# Notion integration
+notion-client==2.2.1
+
+# Scheduling and background tasks
+schedule==1.2.1
+apscheduler==3.10.4
+
+# Database for tracking processed videos
+sqlalchemy==2.0.30
+alembic==1.13.1
+
+# Configuration and environment management
+python-dotenv==1.0.1
+pydantic==2.7.4
+pydantic-settings==2.3.3
+
+# Utilities
+requests==2.32.3
+python-dateutil==2.9.0
+pytz==2024.1
+
+# Development dependencies
+pytest==8.2.2
+black==24.4.2
+flake8==7.0.0
+mypy==1.10.0
