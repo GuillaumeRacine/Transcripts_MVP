@@ -53,9 +53,46 @@ class NotionDatabaseClient:
         
         return None
     
-    def get_unprocessed_videos(self) -> List[Dict[str, Any]]:
+    def is_playlist_url(self, url: str) -> bool:
         """
-        Get all videos from the database that haven't been processed yet.
+        Check if a URL is a YouTube playlist URL.
+        
+        Args:
+            url: URL to check
+            
+        Returns:
+            True if URL is a playlist, False otherwise
+        """
+        if not url:
+            return False
+        
+        # Check for list parameter in URL
+        return 'list=' in url and ('youtube.com' in url or 'youtu.be' in url)
+    
+    def extract_playlist_id_from_url(self, url: str) -> Optional[str]:
+        """
+        Extract playlist ID from YouTube URL.
+        
+        Args:
+            url: YouTube playlist URL
+            
+        Returns:
+            Playlist ID or None if not found
+        """
+        if not url or not self.is_playlist_url(url):
+            return None
+        
+        # Extract list parameter
+        pattern = r'[?&]list=([a-zA-Z0-9_-]+)'
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+        
+        return None
+    
+    def _get_unprocessed_videos_no_playlist_expansion(self) -> List[Dict[str, Any]]:
+        """
+        Get unprocessed videos without expanding playlists (internal method).
         
         Returns:
             List of unprocessed video records
@@ -108,19 +145,18 @@ class NotionDatabaseClient:
                     logger.warning(f"No video URL found in page {page['id']}")
                     continue
                 
-                # Extract video ID
+                # Skip playlist URLs in this method
+                if self.is_playlist_url(video_url):
+                    continue
+                
+                # Extract video ID for regular videos
                 video_id = self.extract_video_id_from_url(video_url)
                 if not video_id:
                     logger.warning(f"Could not extract video ID from URL: {video_url}")
                     continue
                 
                 # Extract title if provided
-                title_prop = properties.get("Title", {})
-                title = None
-                if title_prop.get("type") == "title":
-                    title_texts = title_prop.get("title", [])
-                    if title_texts:
-                        title = title_texts[0].get("plain_text", "")
+                title = self._extract_title_from_page(properties)
                 
                 # Extract status
                 status_prop = properties.get("Status", {})
@@ -139,6 +175,128 @@ class NotionDatabaseClient:
                     "created_time": page.get("created_time"),
                     "last_edited_time": page.get("last_edited_time")
                 })
+            
+            logger.info(f"Found {len(unprocessed)} unprocessed videos (excluding playlists)")
+            return unprocessed
+            
+        except Exception as e:
+            logger.error(f"Error querying database: {str(e)}")
+            return []
+    
+    def get_unprocessed_videos(self, expand_playlists: bool = True) -> List[Dict[str, Any]]:
+        """
+        Get all videos from the database that haven't been processed yet.
+        Automatically detects and expands playlist URLs.
+        
+        Args:
+            expand_playlists: Whether to automatically expand playlist URLs
+        
+        Returns:
+            List of unprocessed video records
+        """
+        try:
+            # Query for videos where Status is not "Completed"
+            response = self.client.databases.query(
+                database_id=self.database_id,
+                filter={
+                    "or": [
+                        {
+                            "property": "Status",
+                            "select": {
+                                "does_not_equal": "Completed"
+                            }
+                        },
+                        {
+                            "property": "Status",
+                            "select": {
+                                "is_empty": True
+                            }
+                        }
+                    ]
+                },
+                sorts=[
+                    {
+                        "timestamp": "created_time",
+                        "direction": "ascending"
+                    }
+                ]
+            )
+            
+            unprocessed = []
+            playlist_urls_found = []
+            
+            for page in response.get("results", []):
+                properties = page.get("properties", {})
+                
+                # Extract video URL
+                video_url_prop = properties.get("Video URL", {})
+                video_url = None
+                
+                if video_url_prop.get("type") == "url":
+                    video_url = video_url_prop.get("url")
+                elif video_url_prop.get("type") == "rich_text":
+                    rich_text = video_url_prop.get("rich_text", [])
+                    if rich_text:
+                        video_url = rich_text[0].get("plain_text", "")
+                
+                if not video_url:
+                    logger.warning(f"No video URL found in page {page['id']}")
+                    continue
+                
+                # Check if this is a playlist URL that hasn't been processed yet
+                if self.is_playlist_url(video_url):
+                    # Check status to see if already processed
+                    status_prop = properties.get("Status", {})
+                    status = None
+                    if status_prop.get("type") == "select":
+                        status_select = status_prop.get("select")
+                        if status_select:
+                            status = status_select.get("name")
+                    
+                    # Only process if not already expanded or completed
+                    if status not in ["Playlist Expanded", "Completed", "Error"]:
+                        logger.info(f"Detected new playlist URL: {video_url}")
+                        playlist_urls_found.append({
+                            'page_id': page['id'],
+                            'playlist_url': video_url,
+                            'title': self._extract_title_from_page(properties)
+                        })
+                    continue
+                
+                # Extract video ID for regular videos
+                video_id = self.extract_video_id_from_url(video_url)
+                if not video_id:
+                    logger.warning(f"Could not extract video ID from URL: {video_url}")
+                    continue
+                
+                # Extract title if provided
+                title = self._extract_title_from_page(properties)
+                
+                # Extract status
+                status_prop = properties.get("Status", {})
+                status = None
+                if status_prop.get("type") == "select":
+                    status_select = status_prop.get("select")
+                    if status_select:
+                        status = status_select.get("name")
+                
+                unprocessed.append({
+                    "page_id": page["id"],
+                    "video_url": video_url,
+                    "video_id": video_id,
+                    "title": title,
+                    "status": status,
+                    "created_time": page.get("created_time"),
+                    "last_edited_time": page.get("last_edited_time")
+                })
+            
+            # Process any playlist URLs found
+            if playlist_urls_found and expand_playlists:
+                logger.info(f"Found {len(playlist_urls_found)} playlist(s) to expand")
+                self._expand_playlist_urls(playlist_urls_found)
+                # Query again for newly added videos but prevent infinite recursion
+                logger.info("Re-querying for newly added videos...")
+                return self.get_unprocessed_videos(expand_playlists=False)
             
             logger.info(f"Found {len(unprocessed)} unprocessed videos")
             return unprocessed
@@ -582,6 +740,73 @@ class NotionDatabaseClient:
             logger.error(f"Error creating page: {str(e)}")
             return None
     
+    def _extract_title_from_page(self, properties: Dict) -> str:
+        """
+        Extract title from page properties.
+        
+        Args:
+            properties: Page properties dictionary
+            
+        Returns:
+            Page title or default
+        """
+        title_prop = properties.get("Title", {})
+        if title_prop.get("type") == "title":
+            title_texts = title_prop.get("title", [])
+            if title_texts:
+                return title_texts[0].get("plain_text", "Untitled")
+        return "Untitled"
+    
+    def _expand_playlist_urls(self, playlist_entries: List[Dict]):
+        """
+        Expand playlist URLs by creating individual video entries.
+        
+        Args:
+            playlist_entries: List of playlist entry dictionaries
+        """
+        # Import here to avoid circular imports
+        from src.handlers.playlist_handler import PlaylistHandler
+        from src.youtube.playlist_fetcher import PlaylistFetcher
+        from src.config import settings
+        
+        try:
+            # Initialize playlist handler
+            youtube_fetcher = PlaylistFetcher(
+                api_key=settings.youtube_api_key,
+                service_account_file=settings.youtube_service_account_file
+            )
+            playlist_handler = PlaylistHandler(youtube_fetcher, self)
+            
+            for entry in playlist_entries:
+                page_id = entry['page_id']
+                playlist_url = entry['playlist_url']
+                
+                logger.info(f"Expanding playlist: {entry['title']}")
+                
+                # Process the playlist to add individual videos
+                result = playlist_handler.process_playlist(playlist_url)
+                
+                if result['success']:
+                    logger.info(f"Added {result['added']} videos from playlist")
+                    
+                    # Update the original playlist entry to mark it as expanded
+                    self.update_video_status(
+                        page_id, 
+                        "Playlist Expanded",
+                        title=f"[PLAYLIST] {entry['title']}",
+                        processed_date=datetime.now()
+                    )
+                else:
+                    logger.error(f"Failed to expand playlist: {result.get('error', 'Unknown error')}")
+                    self.update_video_status(
+                        page_id, 
+                        "Error",
+                        error_message=f"Playlist expansion failed: {result.get('error', 'Unknown error')}"
+                    )
+                    
+        except Exception as e:
+            logger.error(f"Error expanding playlist URLs: {str(e)}")
+    
     def _extract_video_info(self, page) -> Optional[Dict]:
         """
         Extract video information from a Notion page.
@@ -610,12 +835,7 @@ class NotionDatabaseClient:
                 return None
             
             # Extract title
-            title_prop = properties.get('Title', {})
-            title = 'Untitled'
-            if title_prop.get('type') == 'title':
-                title_array = title_prop.get('title', [])
-                if title_array and len(title_array) > 0:
-                    title = title_array[0].get('text', {}).get('content', 'Untitled')
+            title = self._extract_title_from_page(properties)
             
             return {
                 'page_id': page['id'],

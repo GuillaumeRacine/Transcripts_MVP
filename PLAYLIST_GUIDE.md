@@ -154,9 +154,11 @@ You can add these properties to your database for enhanced functionality:
    - Verify your Notion database schema matches requirements
    - Check Notion API permissions and integration setup
 
-4. **Rate Limiting**
+4. **Rate Limiting** ⚠️
    - The YouTube API has quotas (10,000 units/day by default)
-   - Large playlists may hit rate limits; consider using `--max-videos`
+   - Large playlists (15+ videos) are automatically limited to prevent rate limits
+   - If you see "429 Too Many Requests", wait 10-15 minutes before continuing
+   - Use automatic batching or wait between processing sessions for large playlists
 
 ### Debug Mode
 Enable detailed logging to troubleshoot issues:
@@ -168,30 +170,46 @@ tail -f transcripts_app.log
 
 ## 🎯 Best Practices
 
-### 1. Batch Processing
+### 1. Automatic Playlist Detection ⭐ NEW
 ```bash
-# Import in smaller batches for large playlists
-python main_database.py --playlist "URL" --max-videos 25
-python main_database.py --once  # Process the batch
-# Repeat as needed
+# Simply add the playlist URL to your Notion database
+# The system automatically detects and expands playlists!
+# No manual commands needed - just paste the URL in Notion
 ```
 
-### 2. Incremental Updates
+### 2. Handling Large Playlists (15+ videos)
 ```bash
-# For regularly updated playlists, import new videos periodically
-python main_database.py --playlist "URL" --max-videos 10  # Get latest 10
+# For playlists with 15+ videos, the system automatically limits to 15 videos
+# to prevent YouTube rate limits. This is the recommended approach:
+
+# Step 1: Add playlist URL to Notion (automatic detection)
+# Step 2: Process the first batch
+python main_database.py --once
+
+# Step 3: Wait 10-15 minutes, then run again for more videos
+python main_database.py --once
+
+# Alternative: Use batch processing mode
+python main_database.py --once --interval 30  # Process in 30-minute sessions
 ```
 
-### 3. Resource Management
+### 3. Manual Playlist Import (if needed)
 ```bash
-# Monitor API usage and adjust batch sizes accordingly
-# Large playlists (100+ videos) should be imported in smaller chunks
+# Import specific number of videos manually
+python main_database.py --playlist "URL" --max-videos 10
+
+# Process the imported videos
+python main_database.py --once
 ```
 
-### 4. Quality Control
+### 4. Rate Limit Management
 ```bash
-# Review imported videos before processing
-# Use --max-videos for initial testing with new playlists
+# The system includes intelligent rate limiting:
+# - Automatic delays between videos in large batches
+# - Progressive backoff when hitting limits
+# - Smart batching for playlists over 15 videos
+
+# If you hit rate limits, wait 10-15 minutes before continuing
 ```
 
 ## 📚 Integration with Existing Workflows

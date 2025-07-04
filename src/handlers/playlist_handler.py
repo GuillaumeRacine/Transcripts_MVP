@@ -117,20 +117,21 @@ class PlaylistHandler:
         added_count = 0
         skipped_count = 0
         
+        # Get existing videos once before the loop to avoid triggering playlist expansion
+        existing_videos = self.notion_client.get_unprocessed_videos(expand_playlists=False)
+        video_ids = [v.get('video_id') for v in existing_videos if v.get('video_id')]
+        
+        # Also check processed videos
+        processed_videos = self.notion_client.get_processed_videos()
+        processed_video_ids = [v.get('video_id') for v in processed_videos if v.get('video_id')]
+        
+        all_existing_ids = set(video_ids + processed_video_ids)
+        
         for video in videos:
             try:
-                # Check if video already exists in database
-                existing_videos = self.notion_client.get_unprocessed_videos()
-                video_ids = [v.get('video_id') for v in existing_videos if v.get('video_id')]
-                
-                # Also check processed videos
-                processed_videos = self.notion_client.get_processed_videos()
-                processed_video_ids = [v.get('video_id') for v in processed_videos if v.get('video_id')]
-                
-                all_existing_ids = set(video_ids + processed_video_ids)
                 
                 if video['video_id'] in all_existing_ids:
-                    logger.info(f"   Skipping {video['title'][:50]}... (already exists)")
+                    logger.info(f"   Skipping: {video['title'][:50]}... (already exists)")
                     skipped_count += 1
                     continue
                 
@@ -216,12 +217,21 @@ class PlaylistHandler:
                     'total': 0
                 }
             
-            # Limit videos if specified
+            # Smart limiting for rate limit management
+            original_count = len(videos)
             if max_videos and max_videos < len(videos):
                 logger.info(f"   Limiting to first {max_videos} videos")
                 videos = videos[:max_videos]
+            elif len(videos) > 15:
+                # Auto-limit large playlists to prevent rate limit issues
+                logger.info(f"   Large playlist detected ({len(videos)} videos)")
+                logger.info(f"   Limiting to first 15 videos to avoid rate limits")
+                logger.info(f"   Run again to add more videos from this playlist")
+                videos = videos[:15]
             
             logger.info(f"   Found {len(videos)} videos to process")
+            if len(videos) < original_count:
+                logger.info(f"   ({original_count - len(videos)} videos will be added in subsequent runs)")
             logger.info("   Adding videos to Notion database...")
             
             # Add videos to Notion database
@@ -239,6 +249,9 @@ class PlaylistHandler:
             
             logger.info(f"   Playlist processing complete!")
             logger.info(f"   Added: {added_count}, Skipped: {skipped_count}, Total: {len(videos)}")
+            if len(videos) < original_count:
+                remaining = original_count - len(videos) - skipped_count
+                logger.info(f"   Remaining in playlist: {remaining} videos (add them by running playlist command again)")
             
             return results
             

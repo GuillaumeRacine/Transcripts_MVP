@@ -35,7 +35,49 @@ class OpenAISummarizer(BaseSummarizer):
 IMPORTANT INSTRUCTIONS:
 {instructions}
 
-Format your response in Markdown with clear sections and bullet points where appropriate."""
+FORMATTING REQUIREMENTS:
+Use this exact markdown structure for your response:
+
+## 🎯 Why This Matters
+[Brief explanation of relevance and importance]
+
+## 📋 Key Takeaways
+
+### [Topic 1 Name]
+- [Key point 1]
+- [Key point 2]
+- [Key point 3]
+
+### [Topic 2 Name]
+- [Key point 1]
+- [Key point 2]
+- [Key point 3]
+
+### [Topic 3 Name] 
+- [Key point 1]
+- [Key point 2]
+- [Key point 3]
+
+## 💡 Actionable Insights
+- [Practical takeaway 1]
+- [Practical takeaway 2]
+- [Practical takeaway 3]
+
+## 📚 Resources & References
+
+### Books/Articles
+- [Resource 1]
+- [Resource 2]
+
+### Organizations/Tools
+- [Organization 1]
+- [Organization 2]
+
+### Key Concepts
+- **[Concept 1]**: [Brief definition]
+- **[Concept 2]**: [Brief definition]
+
+Use clear headings, bullet points, and bold text for emphasis. Keep sections well-organized and scannable."""
             
             # Build user prompt with video info first
             user_prompt_parts = []
@@ -94,7 +136,49 @@ class AnthropicSummarizer(BaseSummarizer):
 IMPORTANT INSTRUCTIONS:
 {instructions}
 
-Format your response in Markdown with clear sections and bullet points where appropriate."""
+FORMATTING REQUIREMENTS:
+Use this exact markdown structure for your response:
+
+## 🎯 Why This Matters
+[Brief explanation of relevance and importance]
+
+## 📋 Key Takeaways
+
+### [Topic 1 Name]
+- [Key point 1]
+- [Key point 2]
+- [Key point 3]
+
+### [Topic 2 Name]
+- [Key point 1]
+- [Key point 2]
+- [Key point 3]
+
+### [Topic 3 Name] 
+- [Key point 1]
+- [Key point 2]
+- [Key point 3]
+
+## 💡 Actionable Insights
+- [Practical takeaway 1]
+- [Practical takeaway 2]
+- [Practical takeaway 3]
+
+## 📚 Resources & References
+
+### Books/Articles
+- [Resource 1]
+- [Resource 2]
+
+### Organizations/Tools
+- [Organization 1]
+- [Organization 2]
+
+### Key Concepts
+- **[Concept 1]**: [Brief definition]
+- **[Concept 2]**: [Brief definition]
+
+Use clear headings, bullet points, and bold text for emphasis. Keep sections well-organized and scannable."""
             
             # Build user prompt with video info first
             user_prompt_parts = []

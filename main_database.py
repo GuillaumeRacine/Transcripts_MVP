@@ -228,10 +228,16 @@ class VideoProcessor:
                     logger.info(f"\nPlaylist: {playlist_info['title']}")
                     logger.info(f"Channel: {playlist_info['channel_title']}")
                 
-                # Suggest next steps
+                # Suggest next steps with rate limit considerations
                 if result['added'] > 0:
                     logger.info(f"\nNext steps:")
-                    logger.info(f"Run 'python main_database.py --once' to process the new videos")
+                    if result['added'] > 10:
+                        logger.info(f"⚠️  Large playlist detected ({result['added']} videos)")
+                        logger.info(f"To avoid rate limits, consider processing in batches:")
+                        logger.info(f"python main_database.py --once  # Process some videos now")
+                        logger.info(f"# Wait 10-15 minutes, then run again for remaining videos")
+                    else:
+                        logger.info(f"Run 'python main_database.py --once' to process the new videos")
                     
             else:
                 logger.error(f"Failed to process playlist: {result.get('error', 'Unknown error')}")
@@ -247,7 +253,11 @@ class VideoProcessor:
         logger.info("\nChecking for new videos in Notion...")
         
         try:
-            unprocessed_videos = self.notion_client.get_unprocessed_videos()
+            # First, check for any playlist URLs that need expanding
+            self._check_and_expand_playlists()
+            
+            # Then get regular videos to process
+            unprocessed_videos = self.notion_client.get_unprocessed_videos(expand_playlists=False)
             
             if not unprocessed_videos:
                 logger.info("No new videos found")
@@ -255,8 +265,9 @@ class VideoProcessor:
             
             logger.info(f"\nFound {len(unprocessed_videos)} videos to process\n")
             
-            # Process each video
+            # Process each video with intelligent batching for large sets
             stats = {'processed': 0, 'errors': 0, 'skipped': 0}
+            is_large_batch = len(unprocessed_videos) > 10
             
             for i, video_record in enumerate(unprocessed_videos):
                 title = video_record.get('title', 'Untitled')
@@ -269,16 +280,108 @@ class VideoProcessor:
                     stats['errors'] += 1
                 else:  # None means skipped due to rate limits
                     stats['skipped'] += 1
+                
+                # For large batches, add delay between videos to avoid rate limits
+                if is_large_batch and i < len(unprocessed_videos) - 1:
+                    import time
+                    delay = 2 if stats['errors'] == 0 else min(5 + stats['errors'], 15)
+                    logger.info(f"   Waiting {delay}s before next video...")
+                    time.sleep(delay)
+                
+                # If we hit multiple rate limit errors, suggest pausing
+                if stats['errors'] >= 3 and stats['errors'] > stats['processed']:
+                    remaining = len(unprocessed_videos) - i - 1
+                    if remaining > 0:
+                        logger.warning(f"\nHitting rate limits frequently. Consider running again later to process remaining {remaining} videos.")
+                        break
             
             # Final summary
             logger.info(f"\nSummary: {stats['processed']} processed, {stats['errors']} errors, {stats['skipped']} skipped")
             
             if stats['skipped'] > 0:
                 logger.info(f"{stats['skipped']} videos were skipped due to rate limits. Run again later to process them.")
+            
+            if stats['errors'] > 0 and len(unprocessed_videos) > 10:
+                logger.info(f"\nFor large playlists, consider processing in smaller batches using:")
+                logger.info(f"python main_database.py --once --interval 30  # Process every 30 minutes")
+                logger.info(f"Or wait 5-10 minutes before running again to avoid rate limits.")
                 
         except Exception as e:
             logger.error(f"Error checking database: {str(e)}")
             raise
+    
+    def _check_and_expand_playlists(self):
+        """Check for playlist URLs and expand them if needed."""
+        try:
+            # Query for playlist URLs that haven't been expanded
+            response = self.notion_client.client.databases.query(
+                database_id=self.notion_client.database_id,
+                filter={
+                    "and": [
+                        {
+                            "property": "Video URL",
+                            "url": {
+                                "contains": "list="
+                            }
+                        },
+                        {
+                            "or": [
+                                {
+                                    "property": "Status",
+                                    "select": {
+                                        "does_not_equal": "Playlist Expanded"
+                                    }
+                                },
+                                {
+                                    "property": "Status",
+                                    "select": {
+                                        "is_empty": True
+                                    }
+                                }
+                            ]
+                        }
+                    ]
+                }
+            )
+            
+            playlist_entries = []
+            for page in response.get("results", []):
+                properties = page.get("properties", {})
+                
+                # Extract video URL
+                video_url_prop = properties.get("Video URL", {})
+                if video_url_prop.get("type") == "url":
+                    video_url = video_url_prop.get("url")
+                    if video_url and self.notion_client.is_playlist_url(video_url):
+                        title = self.notion_client._extract_title_from_page(properties)
+                        playlist_entries.append({
+                            'page_id': page['id'],
+                            'playlist_url': video_url,
+                            'title': title
+                        })
+            
+            if playlist_entries:
+                logger.info(f"Found {len(playlist_entries)} playlist(s) to expand")
+                for entry in playlist_entries:
+                    logger.info(f"Expanding playlist: {entry['title']}")
+                    result = self.playlist_handler.process_playlist(entry['playlist_url'])
+                    
+                    if result['success']:
+                        logger.info(f"Added {result['added']} videos from playlist")
+                        self.notion_client.update_video_status(
+                            entry['page_id'], 
+                            "Playlist Expanded",
+                            title=f"[PLAYLIST] {entry['title']}"
+                        )
+                    else:
+                        logger.error(f"Failed to expand playlist: {result.get('error')}")
+                        self.notion_client.update_video_status(
+                            entry['page_id'], 
+                            "Error",
+                            error_message=f"Playlist expansion failed: {result.get('error')}"
+                        )
+        except Exception as e:
+            logger.error(f"Error checking for playlists: {str(e)}")
     
     def close(self):
         """Clean up resources."""
@@ -309,7 +412,40 @@ def main():
             processor.process_playlist(args.playlist, args.max_videos)
         elif args.once:
             # Run once and exit
-            processor.check_and_process_videos(force_reprocess=args.reprocess)
+            if args.interval:
+                # Special mode: process for a limited time with delays
+                import time
+                start_time = time.time()
+                max_duration = args.interval * 60  # Convert minutes to seconds
+                
+                logger.info(f"Processing videos for up to {args.interval} minutes with delays...")
+                
+                while time.time() - start_time < max_duration:
+                    unprocessed = processor.notion_client.get_unprocessed_videos(expand_playlists=False)
+                    if not unprocessed:
+                        logger.info("No more videos to process")
+                        break
+                    
+                    # Process just a few videos at a time
+                    batch = unprocessed[:3]
+                    logger.info(f"Processing batch of {len(batch)} videos...")
+                    
+                    for video in batch:
+                        result = processor.process_single_video(video, force_reprocess=args.reprocess)
+                        if result is False:  # Error occurred
+                            logger.info("Waiting 30 seconds after error...")
+                            time.sleep(30)
+                    
+                    remaining_time = max_duration - (time.time() - start_time)
+                    if remaining_time > 60:
+                        logger.info("Waiting 60 seconds before next batch...")
+                        time.sleep(60)
+                    else:
+                        break
+                        
+                logger.info(f"Batch processing session completed")
+            else:
+                processor.check_and_process_videos(force_reprocess=args.reprocess)
         else:
             # Run continuously
             if args.interval:
