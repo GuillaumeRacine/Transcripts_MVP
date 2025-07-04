@@ -106,7 +106,8 @@ class PlaylistFetcher:
                     'like_count': int(item['statistics'].get('likeCount', 0)),
                     'channel_id': item['snippet']['channelId'],
                     'channel_title': item['snippet']['channelTitle'],
-                    'tags': item['snippet'].get('tags', [])
+                    'tags': item['snippet'].get('tags', []),
+                    'video_url': f'https://www.youtube.com/watch?v={video_id}'
                 }
             return None
             

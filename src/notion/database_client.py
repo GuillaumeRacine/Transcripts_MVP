@@ -271,8 +271,11 @@ class NotionDatabaseClient:
             # Convert markdown to Notion blocks
             blocks = self._markdown_to_blocks(content, video_metadata)
             
-            # Determine parent (use database as default)
-            parent = {"type": "page_id", "page_id": parent_page_id} if parent_page_id else {"type": "database_id", "database_id": self.database_id}
+            # Use provided parent page ID, or fall back to database
+            if parent_page_id:
+                parent = {"type": "page_id", "page_id": parent_page_id}
+            else:
+                parent = {"type": "database_id", "database_id": self.database_id}
             
             response = self.client.pages.create(
                 parent=parent,

@@ -7,13 +7,13 @@ from threading import Thread
 logger = logging.getLogger(__name__)
 
 class TranscriptScheduler:
-    def __init__(self, check_function: Callable, interval_hours: int = 24):
+    def __init__(self, check_function: Callable, interval_hours: float = 24):
         """
         Initialize the scheduler.
         
         Args:
             check_function: The function to run periodically
-            interval_hours: Hours between checks (default 24)
+            interval_hours: Hours between checks (default 24, supports fractions for minutes)
         """
         self.check_function = check_function
         self.interval_hours = interval_hours
@@ -33,9 +33,14 @@ class TranscriptScheduler:
                 self.check_function()
             
             # Schedule periodic checks
-            schedule.every(self.interval_hours).hours.do(self.check_function)
-            
-            logger.info(f"Scheduler started. Will check every {self.interval_hours} hours.")
+            if self.interval_hours < 1:
+                # Convert to minutes for intervals less than an hour
+                interval_minutes = int(self.interval_hours * 60)
+                schedule.every(interval_minutes).minutes.do(self.check_function)
+                logger.info(f"Scheduler started. Will check every {interval_minutes} minutes.")
+            else:
+                schedule.every(self.interval_hours).hours.do(self.check_function)
+                logger.info(f"Scheduler started. Will check every {self.interval_hours} hours.")
             
             self.running = True
             # Keep the scheduler running

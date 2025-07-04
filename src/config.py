@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     notion_token: str = Field(..., env="NOTION_TOKEN")
     notion_page_id: Optional[str] = Field(None, env="NOTION_PAGE_ID")  # For legacy page-based workflow
     notion_database_id: Optional[str] = Field(None, env="NOTION_DATABASE_ID")  # For new database workflow
+    notion_summaries_parent_page_id: Optional[str] = Field(None, env="NOTION_SUMMARIES_PARENT_PAGE_ID")  # Parent page for summary pages
     
     # Database Configuration
     database_url: str = Field("sqlite:///./transcripts.db", env="DATABASE_URL")

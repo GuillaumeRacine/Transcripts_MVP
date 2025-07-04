@@ -18,6 +18,7 @@ class ProcessedVideo(Base):
     notion_page_created = Column(Boolean, default=False)
     notion_page_id = Column(String(100))
     error_message = Column(Text)
+    transcript = Column(Text)  # Store the transcript for reuse
     
     def __repr__(self):
         return f"<ProcessedVideo(video_id='{self.video_id}', title='{self.title}')>"
@@ -28,6 +29,9 @@ class Database:
         Base.metadata.create_all(self.engine)
         Session = sessionmaker(bind=self.engine)
         self.session = Session()
+        
+        # Auto-migrate if needed
+        self._ensure_migrations()
     
     def add_processed_video(self, video_data: dict) -> ProcessedVideo:
         """Add a new processed video to the database or update existing."""
@@ -67,6 +71,21 @@ class Database:
         """Get a processed video by ID."""
         return self.session.query(ProcessedVideo).filter_by(video_id=video_id).first()
     
+    def get_processed_video_dict(self, video_id: str) -> dict:
+        """Get a processed video as a dictionary."""
+        video = self.get_processed_video(video_id)
+        if not video:
+            return None
+        return {
+            'video_id': video.video_id,
+            'title': video.title,
+            'channel_title': video.channel_title,
+            'published_at': video.published_at,
+            'transcript': video.transcript,
+            'summary_generated': video.summary_generated,
+            'notion_page_id': video.notion_page_id
+        }
+    
     def is_video_processed(self, video_id: str) -> bool:
         """Check if a video has been processed."""
         video = self.get_processed_video(video_id)
@@ -94,6 +113,32 @@ class Database:
         return self.session.query(ProcessedVideo).filter(
             ProcessedVideo.error_message.isnot(None)
         ).all()
+    
+    def _ensure_migrations(self):
+        """Ensure all database migrations are applied."""
+        import sqlite3
+        
+        # Extract the actual database path
+        db_path = self.engine.url.database
+        if not db_path:
+            return
+            
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+            
+            # Check if transcript column exists
+            cursor.execute("PRAGMA table_info(processed_videos)")
+            columns = [column[1] for column in cursor.fetchall()]
+            
+            if 'transcript' not in columns:
+                cursor.execute("ALTER TABLE processed_videos ADD COLUMN transcript TEXT")
+                conn.commit()
+                
+            conn.close()
+        except Exception:
+            # Ignore migration errors - table might not exist yet
+            pass
     
     def close(self):
         """Close the database session."""

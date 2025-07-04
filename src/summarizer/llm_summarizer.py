@@ -29,20 +29,28 @@ class OpenAISummarizer(BaseSummarizer):
             Summarized content
         """
         try:
-            # Prepare the prompt
-            system_prompt = f"""You are an expert at summarizing video transcripts. 
-            Follow these instructions carefully: {instructions}
+            # Prepare the prompt with clearer formatting
+            system_prompt = f"""You are an expert at summarizing video transcripts.
+
+IMPORTANT INSTRUCTIONS:
+{instructions}
+
+Format your response in Markdown with clear sections and bullet points where appropriate."""
             
-            Format your response in Markdown with clear sections and bullet points where appropriate."""
-            
-            user_prompt = f"Video Transcript:\n{transcript}"
+            # Build user prompt with video info first
+            user_prompt_parts = []
             
             if video_metadata:
-                metadata_str = f"\n\nVideo Information:\n"
-                metadata_str += f"- Title: {video_metadata.get('title', 'N/A')}\n"
-                metadata_str += f"- Channel: {video_metadata.get('channel_title', 'N/A')}\n"
-                metadata_str += f"- Published: {video_metadata.get('published_at', 'N/A')}\n"
-                user_prompt = metadata_str + "\n" + user_prompt
+                user_prompt_parts.append("VIDEO INFORMATION:")
+                user_prompt_parts.append(f"Title: {video_metadata.get('title', 'N/A')}")
+                user_prompt_parts.append(f"Channel: {video_metadata.get('channel_title', 'N/A')}")
+                user_prompt_parts.append(f"Published: {video_metadata.get('published_at', 'N/A')}")
+                user_prompt_parts.append(f"URL: {video_metadata.get('video_url', 'N/A')}")
+                user_prompt_parts.append("")
+                user_prompt_parts.append("TRANSCRIPT:")
+            
+            user_prompt_parts.append(transcript)
+            user_prompt = "\n".join(user_prompt_parts)
             
             response = self.client.chat.completions.create(
                 model=self.model,
@@ -51,7 +59,7 @@ class OpenAISummarizer(BaseSummarizer):
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.3,
-                max_tokens=2000
+                max_tokens=4000  # Increased for 1000-1500 word summaries
             )
             
             summary = response.choices[0].message.content
@@ -80,24 +88,32 @@ class AnthropicSummarizer(BaseSummarizer):
             Summarized content
         """
         try:
-            # Prepare the prompt
-            system_prompt = f"""You are an expert at summarizing video transcripts. 
-            Follow these instructions carefully: {instructions}
+            # Prepare the prompt with clearer formatting
+            system_prompt = f"""You are an expert at summarizing video transcripts.
+
+IMPORTANT INSTRUCTIONS:
+{instructions}
+
+Format your response in Markdown with clear sections and bullet points where appropriate."""
             
-            Format your response in Markdown with clear sections and bullet points where appropriate."""
-            
-            user_prompt = f"Video Transcript:\n{transcript}"
+            # Build user prompt with video info first
+            user_prompt_parts = []
             
             if video_metadata:
-                metadata_str = f"\n\nVideo Information:\n"
-                metadata_str += f"- Title: {video_metadata.get('title', 'N/A')}\n"
-                metadata_str += f"- Channel: {video_metadata.get('channel_title', 'N/A')}\n"
-                metadata_str += f"- Published: {video_metadata.get('published_at', 'N/A')}\n"
-                user_prompt = metadata_str + "\n" + user_prompt
+                user_prompt_parts.append("VIDEO INFORMATION:")
+                user_prompt_parts.append(f"Title: {video_metadata.get('title', 'N/A')}")
+                user_prompt_parts.append(f"Channel: {video_metadata.get('channel_title', 'N/A')}")
+                user_prompt_parts.append(f"Published: {video_metadata.get('published_at', 'N/A')}")
+                user_prompt_parts.append(f"URL: {video_metadata.get('video_url', 'N/A')}")
+                user_prompt_parts.append("")
+                user_prompt_parts.append("TRANSCRIPT:")
+            
+            user_prompt_parts.append(transcript)
+            user_prompt = "\n".join(user_prompt_parts)
             
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=2000,
+                max_tokens=4000,  # Increased for 1000-1500 word summaries
                 temperature=0.3,
                 system=system_prompt,
                 messages=[

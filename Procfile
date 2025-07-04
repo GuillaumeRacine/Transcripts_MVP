@@ -1,0 +1,1 @@
+worker: python main_database.py --interval 30
