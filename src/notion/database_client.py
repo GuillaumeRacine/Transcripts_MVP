@@ -530,3 +530,100 @@ class NotionDatabaseClient:
         except Exception as e:
             logger.error(f"Error checking database schema: {str(e)}")
             return False
+    
+    def get_processed_videos(self) -> List[Dict[str, Any]]:
+        """
+        Get all processed videos from the database.
+        
+        Returns:
+            List of processed video records
+        """
+        try:
+            response = self.client.databases.query(
+                database_id=self.database_id,
+                filter={
+                    "property": "Status",
+                    "select": {
+                        "equals": "Completed"
+                    }
+                }
+            )
+            
+            processed_videos = []
+            for page in response.get('results', []):
+                video_record = self._extract_video_info(page)
+                if video_record:
+                    processed_videos.append(video_record)
+            
+            return processed_videos
+            
+        except Exception as e:
+            logger.error(f"Error fetching processed videos: {str(e)}")
+            return []
+    
+    def create_page(self, properties: Dict) -> Optional[Dict]:
+        """
+        Create a new page in the Notion database.
+        
+        Args:
+            properties: Page properties dictionary
+            
+        Returns:
+            Created page response or None if failed
+        """
+        try:
+            response = self.client.pages.create(
+                parent={"database_id": self.database_id},
+                properties=properties
+            )
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error creating page: {str(e)}")
+            return None
+    
+    def _extract_video_info(self, page) -> Optional[Dict]:
+        """
+        Extract video information from a Notion page.
+        
+        Args:
+            page: Notion page object
+            
+        Returns:
+            Dictionary with video information or None if invalid
+        """
+        try:
+            properties = page.get('properties', {})
+            
+            # Extract video URL
+            video_url_prop = properties.get('Video URL', {})
+            if video_url_prop.get('type') == 'url':
+                video_url = video_url_prop.get('url')
+                if not video_url:
+                    return None
+            else:
+                return None
+            
+            # Extract video ID from URL
+            video_id = self.extract_video_id_from_url(video_url)
+            if not video_id:
+                return None
+            
+            # Extract title
+            title_prop = properties.get('Title', {})
+            title = 'Untitled'
+            if title_prop.get('type') == 'title':
+                title_array = title_prop.get('title', [])
+                if title_array and len(title_array) > 0:
+                    title = title_array[0].get('text', {}).get('content', 'Untitled')
+            
+            return {
+                'page_id': page['id'],
+                'video_id': video_id,
+                'video_url': video_url,
+                'title': title
+            }
+            
+        except Exception as e:
+            logger.error(f"Error extracting video info from page: {str(e)}")
+            return None

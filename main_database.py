@@ -8,7 +8,7 @@ and automatically generates AI-powered summaries.
 
 import logging
 import sys
-from typing import Optional
+from typing import Optional, Dict
 from datetime import datetime
 
 from src.config import settings
@@ -19,6 +19,7 @@ from src.notion.database_client import NotionDatabaseClient
 from src.database.models import Database
 from src.scheduler.scheduler import TranscriptScheduler
 from src.backup.markdown_backup import MarkdownBackup
+from src.handlers.playlist_handler import PlaylistHandler
 
 # Clean logging setup
 logging.basicConfig(
@@ -71,6 +72,9 @@ class VideoProcessor:
         self.notion_client = NotionDatabaseClient(settings.notion_token, settings.notion_database_id)
         self.db = Database(settings.database_url)
         self.markdown_backup = MarkdownBackup()
+        
+        # Playlist handler
+        self.playlist_handler = PlaylistHandler(self.youtube_fetcher, self.notion_client)
         
         # Verify schema
         if not self.notion_client.setup_database_schema():
@@ -127,10 +131,11 @@ class VideoProcessor:
         logger.info("   Extracting transcript...")
         transcript = self.transcript_extractor.extract_transcript(video_id)
         if transcript:
-            # Cache the transcript
+            # Cache the transcript (will be updated with full video info later)
             self.db.add_processed_video({
                 'video_id': video_id,
                 'title': 'Processing...',
+                'published_at': '2024-01-01T00:00:00Z',  # Placeholder, will be updated
                 'transcript_extracted': True,
                 'transcript': transcript
             })
@@ -205,9 +210,41 @@ class VideoProcessor:
         self.db.update_video_status(video_id, error_message=error_message)
         return False
     
+    def process_playlist(self, playlist_url: str, max_videos: Optional[int] = None) -> Dict:
+        """Process a YouTube playlist and add videos to Notion database."""
+        logger.info(f"\nProcessing YouTube playlist...")
+        
+        try:
+            result = self.playlist_handler.process_playlist(playlist_url, max_videos)
+            
+            if result['success']:
+                logger.info(f"\nPlaylist processing completed successfully!")
+                logger.info(f"Added {result['added']} new videos to database")
+                logger.info(f"Skipped {result['skipped']} existing videos")
+                logger.info(f"Total videos in playlist: {result['total']}")
+                
+                if result.get('playlist_info'):
+                    playlist_info = result['playlist_info']
+                    logger.info(f"\nPlaylist: {playlist_info['title']}")
+                    logger.info(f"Channel: {playlist_info['channel_title']}")
+                
+                # Suggest next steps
+                if result['added'] > 0:
+                    logger.info(f"\nNext steps:")
+                    logger.info(f"Run 'python main_database.py --once' to process the new videos")
+                    
+            else:
+                logger.error(f"Failed to process playlist: {result.get('error', 'Unknown error')}")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error processing playlist: {str(e)}")
+            return {'success': False, 'error': str(e), 'added': 0, 'skipped': 0, 'total': 0}
+
     def check_and_process_videos(self, force_reprocess: bool = False):
         """Main processing loop - check for new videos and process them."""
-        logger.info("\\nChecking for new videos in Notion...")
+        logger.info("\nChecking for new videos in Notion...")
         
         try:
             unprocessed_videos = self.notion_client.get_unprocessed_videos()
@@ -216,14 +253,14 @@ class VideoProcessor:
                 logger.info("No new videos found")
                 return
             
-            logger.info(f"\\nFound {len(unprocessed_videos)} videos to process\\n")
+            logger.info(f"\nFound {len(unprocessed_videos)} videos to process\n")
             
             # Process each video
             stats = {'processed': 0, 'errors': 0, 'skipped': 0}
             
             for i, video_record in enumerate(unprocessed_videos):
                 title = video_record.get('title', 'Untitled')
-                logger.info(f"\\n[{i+1}/{len(unprocessed_videos)}] {title[:60]}")
+                logger.info(f"\n[{i+1}/{len(unprocessed_videos)}] {title[:60]}")
                 
                 result = self.process_single_video(video_record, force_reprocess)
                 if result is True:
@@ -234,7 +271,7 @@ class VideoProcessor:
                     stats['skipped'] += 1
             
             # Final summary
-            logger.info(f"\\nSummary: {stats['processed']} processed, {stats['errors']} errors, {stats['skipped']} skipped")
+            logger.info(f"\nSummary: {stats['processed']} processed, {stats['errors']} errors, {stats['skipped']} skipped")
             
             if stats['skipped'] > 0:
                 logger.info(f"{stats['skipped']} videos were skipped due to rate limits. Run again later to process them.")
@@ -252,40 +289,45 @@ def main():
     """Main entry point with argument parsing."""
     import argparse
     
-    print("\\nYouTube to Notion Transcript Processor")
+    print("\nYouTube to Notion Transcript Processor")
     print("-" * 40)
     
     parser = argparse.ArgumentParser(description='YouTube Transcript to Notion Database Processor')
     parser.add_argument('--once', action='store_true', help='Run once instead of scheduling')
     parser.add_argument('--reprocess', action='store_true', help='Force reprocessing of already processed videos')
     parser.add_argument('--interval', type=int, help='Check interval in minutes (overrides env setting)')
+    parser.add_argument('--playlist', type=str, help='Process a YouTube playlist URL and add videos to database')
+    parser.add_argument('--max-videos', type=int, help='Maximum number of videos to add from playlist (default: all)')
     
     args = parser.parse_args()
     
     try:
         processor = VideoProcessor()
         
-        if args.once:
+        if args.playlist:
+            # Process playlist and add videos to database
+            processor.process_playlist(args.playlist, args.max_videos)
+        elif args.once:
             # Run once and exit
             processor.check_and_process_videos(force_reprocess=args.reprocess)
         else:
             # Run continuously
             if args.interval:
                 interval_hours = args.interval / 60.0
-                logger.info(f"\\nStarting continuous monitor (checking every {args.interval} minutes)")
+                logger.info(f"\nStarting continuous monitor (checking every {args.interval} minutes)")
             else:
                 interval_hours = settings.check_interval_hours
-                logger.info(f"\\nStarting continuous monitor (checking every {interval_hours} hours)")
+                logger.info(f"\nStarting continuous monitor (checking every {interval_hours} hours)")
             
             scheduler = TranscriptScheduler(
                 check_function=lambda: processor.check_and_process_videos(force_reprocess=args.reprocess),
                 interval_hours=interval_hours
             )
-            logger.info("Press Ctrl+C to stop\\n")
+            logger.info("Press Ctrl+C to stop\n")
             scheduler.start(run_immediately=True)
         
     except KeyboardInterrupt:
-        logger.info("\\nApplication stopped by user")
+        logger.info("\nApplication stopped by user")
     except Exception as e:
         logger.error(f"Application error: {str(e)}")
         sys.exit(1)
