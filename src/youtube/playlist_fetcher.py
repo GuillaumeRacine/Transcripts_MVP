@@ -55,12 +55,22 @@ class PlaylistFetcher:
                 response = request.execute()
                 
                 for item in response.get('items', []):
+                    # Safely extract thumbnail URL
+                    thumbnail_url = ''
+                    thumbnails = item['snippet'].get('thumbnails', {})
+                    if 'default' in thumbnails:
+                        thumbnail_url = thumbnails['default']['url']
+                    elif 'medium' in thumbnails:
+                        thumbnail_url = thumbnails['medium']['url']
+                    elif 'high' in thumbnails:
+                        thumbnail_url = thumbnails['high']['url']
+                    
                     video_info = {
                         'video_id': item['contentDetails']['videoId'],
                         'title': item['snippet']['title'],
                         'description': item['snippet'].get('description', ''),
                         'published_at': item['snippet']['publishedAt'],
-                        'thumbnail_url': item['snippet']['thumbnails']['default']['url'],
+                        'thumbnail_url': thumbnail_url,
                         'channel_title': item['snippet']['channelTitle'],
                         'playlist_position': item['snippet']['position']
                     }

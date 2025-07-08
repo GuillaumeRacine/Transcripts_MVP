@@ -30,7 +30,9 @@ class OpenAISummarizer(BaseSummarizer):
         """
         try:
             # Prepare the prompt with clearer formatting
-            system_prompt = f"""You are an expert at summarizing video transcripts.
+            system_prompt = f"""You are an expert at summarizing video transcripts. 
+
+CRITICAL REQUIREMENT: Your response MUST be 1,000-1,500 words. This is non-negotiable. Write detailed, comprehensive content that reaches this word count.
 
 IMPORTANT INSTRUCTIONS:
 {instructions}
@@ -101,7 +103,7 @@ Use clear headings, bullet points, and bold text for emphasis. Keep sections wel
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.3,
-                max_tokens=4000  # Increased for 1000-1500 word summaries
+                max_tokens=6000  # Increased for 1000-1500 word summaries
             )
             
             summary = response.choices[0].message.content
@@ -113,7 +115,7 @@ Use clear headings, bullet points, and bold text for emphasis. Keep sections wel
             raise
 
 class AnthropicSummarizer(BaseSummarizer):
-    def __init__(self, api_key: str, model: str = "claude-3-sonnet-20240229"):
+    def __init__(self, api_key: str, model: str = "claude-3-opus-20240229"):
         self.client = Anthropic(api_key=api_key)
         self.model = model
     
@@ -131,7 +133,9 @@ class AnthropicSummarizer(BaseSummarizer):
         """
         try:
             # Prepare the prompt with clearer formatting
-            system_prompt = f"""You are an expert at summarizing video transcripts.
+            system_prompt = f"""You are an expert at summarizing video transcripts. 
+
+CRITICAL REQUIREMENT: Your response MUST be 1,000-1,500 words. This is non-negotiable. Write detailed, comprehensive content that reaches this word count.
 
 IMPORTANT INSTRUCTIONS:
 {instructions}
@@ -197,7 +201,7 @@ Use clear headings, bullet points, and bold text for emphasis. Keep sections wel
             
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=4000,  # Increased for 1000-1500 word summaries
+                max_tokens=4096,  # Claude Opus maximum
                 temperature=0.3,
                 system=system_prompt,
                 messages=[

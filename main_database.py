@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-YouTube to Notion Transcript Processor - Simplified Main Entry Point
+YouTube to Notion Transcript Processor
 
-A streamlined application that monitors Notion databases for YouTube videos
-and automatically generates AI-powered summaries.
+Automatically processes YouTube videos from Notion database and generates
+comprehensive AI-powered summaries using Claude 3 Opus.
 """
 
 import logging
@@ -14,14 +14,14 @@ from datetime import datetime
 from src.config import settings
 from src.youtube.playlist_fetcher import PlaylistFetcher
 from src.transcript.extractor import TranscriptExtractor
-from src.summarizer.llm_summarizer import SummarizerFactory
+from src.summarizer.multi_part_summarizer import MultiPartSummarizer
 from src.notion.database_client import NotionDatabaseClient
 from src.database.models import Database
 from src.scheduler.scheduler import TranscriptScheduler
 from src.backup.markdown_backup import MarkdownBackup
 from src.handlers.playlist_handler import PlaylistHandler
 
-# Clean logging setup
+# Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(message)s',
@@ -32,18 +32,16 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Suppress verbose logging from libraries
-for lib in ['googleapiclient.discovery_cache', 'httpx', 'src.notion.database_client', 
-           'src.youtube.playlist_fetcher', 'src.transcript.extractor', 
-           'src.summarizer.llm_summarizer', 'src.backup.markdown_backup']:
+# Suppress verbose library logging
+for lib in ['googleapiclient.discovery_cache', 'httpx']:
     logging.getLogger(lib).setLevel(logging.WARNING)
 
 
 class VideoProcessor:
-    """Simplified video processor with clean separation of concerns."""
+    """Main video processor for YouTube to Notion workflow."""
     
     def __init__(self):
-        """Initialize all components with validation."""
+        """Initialize processor with all required components."""
         self._validate_config()
         self._init_components()
         
@@ -51,8 +49,8 @@ class VideoProcessor:
         """Validate required configuration."""
         if not settings.notion_database_id:
             raise ValueError("NOTION_DATABASE_ID must be configured")
-        if not (settings.openai_api_key or settings.anthropic_api_key):
-            raise ValueError("Either OPENAI_API_KEY or ANTHROPIC_API_KEY must be configured")
+        if not settings.anthropic_api_key:
+            raise ValueError("ANTHROPIC_API_KEY must be configured")
     
     def _init_components(self):
         """Initialize all service components."""
@@ -63,10 +61,8 @@ class VideoProcessor:
         )
         self.transcript_extractor = TranscriptExtractor()
         
-        # LLM summarizer
-        provider = settings.llm_provider
-        api_key = settings.anthropic_api_key if provider == 'anthropic' else settings.openai_api_key
-        self.summarizer = SummarizerFactory.create_summarizer(provider, api_key)
+        # Use multi-part summarizer for comprehensive analysis
+        self.summarizer = MultiPartSummarizer(settings.anthropic_api_key)
         
         # Storage components
         self.notion_client = NotionDatabaseClient(settings.notion_token, settings.notion_database_id)
@@ -142,16 +138,16 @@ class VideoProcessor:
         return transcript
     
     def _generate_summary(self, transcript: str, video_info: dict) -> str:
-        """Generate AI summary using configured provider."""
-        logger.info("   Generating AI summary...")
-        summary = self.summarizer.summarize(
+        """Generate comprehensive AI summary using Claude 3 Opus."""
+        logger.info("   Generating comprehensive AI summary...")
+        
+        summary = self.summarizer.generate_comprehensive_summary(
             transcript=transcript,
-            instructions=settings.summary_instructions,
             video_metadata=video_info
         )
         
         word_count = len(summary.split())
-        logger.info(f"   Generated {word_count} word summary")
+        logger.info(f"   Generated {word_count} word comprehensive summary")
         return summary
     
     def _create_summary_page(self, video_info: dict, summary: str, transcript: str) -> bool:
@@ -264,6 +260,13 @@ class VideoProcessor:
                 return
             
             logger.info(f"\nFound {len(unprocessed_videos)} videos to process\n")
+            
+            # Batch processing optimized for cloud deployment
+            if len(unprocessed_videos) > 15:
+                logger.info(f"⚠️  Large batch detected ({len(unprocessed_videos)} videos)")
+                logger.info(f"Processing first 15 videos to prevent timeout...")
+                unprocessed_videos = unprocessed_videos[:15]
+                logger.info(f"Remaining videos will be processed in next scheduled run")
             
             # Process each video with intelligent batching for large sets
             stats = {'processed': 0, 'errors': 0, 'skipped': 0}

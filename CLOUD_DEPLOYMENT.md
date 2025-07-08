@@ -1,334 +1,202 @@
-# Cloud Deployment Guide for YouTube Transcript Processor
+# Cloud Deployment Guide
 
-This guide covers deploying the YouTube Transcript Processor to various cloud platforms for continuous operation.
+This guide covers deploying the YouTube Transcript Processor for 24/7 automated operation.
 
-## Overview
+## ☁️ Google Cloud Run Jobs (Recommended)
 
-Running the processor in the cloud allows it to continuously monitor your Notion database for new videos without requiring your local machine to be always on.
-
-## Option 1: Heroku (Simplest)
+### Overview
+- **Cost**: ~$5-10/month for daily processing
+- **Timeout**: 60 minutes per execution
+- **Batch Size**: 15 videos per run (prevents timeouts)
+- **Schedule**: Daily at 2 AM UTC
+- **Auto-scaling**: Scales to zero when not running
 
 ### Prerequisites
-- Heroku account (free tier works)
-- Heroku CLI installed
+- Google Cloud Project with billing enabled
+- gcloud CLI installed and authenticated
+- Docker/Cloud Build enabled
 
-### Steps
+### Deployment Steps
 
-1. Create a `Procfile` in your project root:
-```
-worker: python main_database.py --interval 30
-```
-
-2. Create `runtime.txt` to specify Python version:
-```
-python-3.11.0
-```
-
-3. Deploy to Heroku:
+1. **Set up Google Cloud project**
 ```bash
-# Login to Heroku
-heroku login
+# Set project
+gcloud config set project YOUR_PROJECT_ID
 
-# Create new app
+# Enable required APIs
+gcloud services enable run.googleapis.com
+gcloud services enable cloudbuild.googleapis.com
+gcloud services enable cloudscheduler.googleapis.com
+```
+
+2. **Build and push Docker image**
+```bash
+# Build image using Cloud Build
+gcloud builds submit --tag gcr.io/YOUR_PROJECT_ID/transcript-processor
+
+# Or build locally (if Docker available)
+docker build -t gcr.io/YOUR_PROJECT_ID/transcript-processor .
+docker push gcr.io/YOUR_PROJECT_ID/transcript-processor
+```
+
+3. **Create Cloud Run Job**
+```bash
+gcloud run jobs create transcript-processor \
+  --image gcr.io/YOUR_PROJECT_ID/transcript-processor \
+  --region us-central1 \
+  --max-retries 1 \
+  --parallelism 1 \
+  --task-timeout 3600 \
+  --memory 1Gi \
+  --cpu 1
+```
+
+4. **Set environment variables**
+```bash
+gcloud run jobs update transcript-processor \
+  --region us-central1 \
+  --set-env-vars="NOTION_TOKEN=your_token,NOTION_DATABASE_ID=your_db_id,ANTHROPIC_API_KEY=your_key,YOUTUBE_SERVICE_ACCOUNT_FILE=/app/youtube_service_account.json"
+```
+
+5. **Create scheduler (optional)**
+```bash
+# Daily at 2 AM UTC
+gcloud scheduler jobs create http transcript-processor-scheduler \
+  --schedule="0 2 * * *" \
+  --uri="https://us-central1-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/YOUR_PROJECT_ID/jobs/transcript-processor:run" \
+  --http-method=POST \
+  --oauth-service-account-email="YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com"
+```
+
+6. **Test execution**
+```bash
+# Manual execution
+gcloud run jobs execute transcript-processor --region us-central1
+
+# Check logs
+gcloud logging read "resource.labels.job_name=transcript-processor" --limit=20
+```
+
+### Cost Estimation
+- **Cloud Run Jobs**: ~$0.10 per hour of execution
+- **Daily run (1 hour)**: ~$3/month
+- **Storage**: ~$1/month for container images
+- **Claude 3 Opus**: ~$0.86-$1.19 per video processed
+
+## 🚀 Alternative: Heroku
+
+### Simple Heroku Deployment
+```bash
+# Create app
 heroku create your-transcript-processor
 
 # Set environment variables
-heroku config:set YOUTUBE_API_KEY="your-key"
 heroku config:set NOTION_TOKEN="your-token"
 heroku config:set NOTION_DATABASE_ID="your-database-id"
 heroku config:set ANTHROPIC_API_KEY="your-key"
-heroku config:set LLM_PROVIDER="anthropic"
+heroku config:set YOUTUBE_SERVICE_ACCOUNT_FILE="./youtube_service_account.json"
 
 # Deploy
 git push heroku main
 
-# Scale the worker
+# Scale worker (paid plan required for continuous)
 heroku ps:scale worker=1
-
-# View logs
-heroku logs --tail
 ```
 
-## Option 2: Railway (Modern Alternative)
+**Cost**: ~$7/month for basic plan
 
-### Steps
+## 🐳 Docker Deployment
 
-1. Install Railway CLI:
-```bash
-npm install -g @railway/cli
-```
-
-2. Deploy:
-```bash
-# Login
-railway login
-
-# Initialize project
-railway init
-
-# Add environment variables via dashboard or CLI
-railway variables set YOUTUBE_API_KEY="your-key"
-railway variables set NOTION_TOKEN="your-token"
-# ... add all other variables
-
-# Deploy
-railway up
-
-# The app will automatically run based on Procfile
-```
-
-## Option 3: DigitalOcean Apps
-
-### Steps
-
-1. Create `app.yaml`:
-```yaml
-name: transcript-processor
-services:
-- name: worker
-  github:
-    branch: main
-    repo: your-username/your-repo
-  run_command: python main_database.py --interval 30
-  instance_count: 1
-  instance_size_slug: basic-xxs
-  envs:
-  - key: YOUTUBE_API_KEY
-    value: "your-key"
-    type: SECRET
-  - key: NOTION_TOKEN
-    value: "your-token"
-    type: SECRET
-  # Add other environment variables
-```
-
-2. Deploy via DigitalOcean dashboard or CLI
-
-## Option 4: AWS EC2 (Free Tier)
-
-### Steps
-
-1. Launch EC2 instance (t2.micro for free tier)
-2. SSH into instance and setup:
-
-```bash
-# Update system
-sudo apt-get update
-sudo apt-get upgrade -y
-
-# Install Python and git
-sudo apt-get install python3.11 python3-pip git -y
-
-# Clone repository
-git clone https://github.com/your-username/your-repo.git
-cd your-repo
-
-# Install dependencies
-pip3 install -r requirements.txt
-
-# Create environment file
-cat > .env << EOL
-YOUTUBE_API_KEY=your-key
-NOTION_TOKEN=your-token
-NOTION_DATABASE_ID=your-database-id
-ANTHROPIC_API_KEY=your-key
-LLM_PROVIDER=anthropic
-EOL
-
-# Setup systemd service
-sudo cat > /etc/systemd/system/transcript-processor.service << EOL
-[Unit]
-Description=YouTube Transcript Processor
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/your-repo
-ExecStart=/usr/bin/python3 /home/ubuntu/your-repo/main_database.py --interval 30
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-EOL
-
-# Enable and start service
-sudo systemctl enable transcript-processor
-sudo systemctl start transcript-processor
-
-# Check status
-sudo systemctl status transcript-processor
-```
-
-## Option 5: Google Cloud Run Jobs (Serverless)
-
-### Steps
-
-1. Create `Dockerfile`:
-```dockerfile
-FROM python:3.11-slim
-
-WORKDIR /app
-
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY . .
-
-CMD ["python", "main_database.py", "--once"]
-```
-
-2. Deploy as Cloud Run Job:
-```bash
-# Build and push image
-gcloud builds submit --tag gcr.io/YOUR_PROJECT_ID/transcript-processor
-
-# Create Cloud Run Job
-gcloud run jobs create transcript-processor \
-  --image gcr.io/YOUR_PROJECT_ID/transcript-processor \
-  --set-env-vars YOUTUBE_API_KEY=your-key,NOTION_TOKEN=your-token \
-  --schedule="*/30 * * * *"  # Run every 30 minutes
-```
-
-## Docker Deployment (Any Cloud)
-
-Create a `Dockerfile`:
-```dockerfile
-FROM python:3.11-slim
-
-WORKDIR /app
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application
-COPY . .
-
-# Run the application
-CMD ["python", "main_database.py", "--interval", "30"]
-```
-
-Build and run:
+### Build and run locally
 ```bash
 # Build image
 docker build -t transcript-processor .
 
-# Run container
-docker run -d \
-  --name transcript-processor \
-  --restart unless-stopped \
-  -e YOUTUBE_API_KEY="your-key" \
-  -e NOTION_TOKEN="your-token" \
-  -e NOTION_DATABASE_ID="your-database-id" \
-  -e ANTHROPIC_API_KEY="your-key" \
-  -e LLM_PROVIDER="anthropic" \
-  transcript-processor
+# Run with environment file
+docker run -d --env-file .env transcript-processor
+
+# View logs
+docker logs -f <container_id>
 ```
 
-## Environment Variables
+### Deploy to any cloud provider
+- **AWS ECS/Fargate**: Container service
+- **Azure Container Instances**: Serverless containers  
+- **DigitalOcean App Platform**: Simple container deployment
 
-All deployments require these environment variables:
+## 📊 Monitoring & Management
 
+### Cloud Run Jobs Monitoring
 ```bash
-# Required
-YOUTUBE_API_KEY=your-youtube-api-key
-NOTION_TOKEN=your-notion-token
-NOTION_DATABASE_ID=your-database-id
+# List executions
+gcloud run jobs executions list --job=transcript-processor
 
-# LLM Provider (choose one)
-OPENAI_API_KEY=your-openai-key      # If using OpenAI
-ANTHROPIC_API_KEY=your-anthropic-key # If using Anthropic
-LLM_PROVIDER=anthropic               # or "openai"
+# Get execution details
+gcloud run jobs executions describe EXECUTION_NAME
 
-# Optional
-NOTION_SUMMARIES_PARENT_PAGE_ID=parent-page-id
-CHECK_INTERVAL_HOURS=1               # Default check interval
-YOUTUBE_SERVICE_ACCOUNT_FILE=path/to/service-account.json
+# View logs
+gcloud logging read "resource.labels.job_name=transcript-processor"
+
+# Update job configuration
+gcloud run jobs update transcript-processor --memory=2Gi
 ```
-
-## Monitoring
-
-### View Logs
-
-- **Heroku**: `heroku logs --tail`
-- **Railway**: `railway logs`
-- **DigitalOcean**: View in dashboard
-- **AWS EC2**: `sudo journalctl -u transcript-processor -f`
-- **Docker**: `docker logs -f transcript-processor`
 
 ### Health Checks
+The application automatically:
+- Validates configuration on startup
+- Handles API rate limits with exponential backoff
+- Limits batch size to prevent timeouts
+- Creates markdown backups if Notion fails
+- Logs detailed processing information
 
-Consider adding a simple health check endpoint if you need monitoring:
+### Troubleshooting
+1. **Check logs**: Review Cloud Run execution logs
+2. **Verify environment**: Ensure all required environment variables are set
+3. **Test locally**: Run `python main_database.py --once` locally first
+4. **Resource limits**: Increase memory/timeout if needed
+5. **API quotas**: Monitor YouTube and Anthropic API usage
 
-```python
-# Add to main_database.py
-from flask import Flask
-import threading
+## 🔄 Scheduling Options
 
-app = Flask(__name__)
-
-@app.route('/health')
-def health():
-    return 'OK', 200
-
-# Run Flask in a separate thread
-def run_health_server():
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
-
-if not args.once:
-    health_thread = threading.Thread(target=run_health_server)
-    health_thread.daemon = True
-    health_thread.start()
-```
-
-## Cost Considerations
-
-- **Heroku**: Free tier includes 550 dyno hours/month
-- **Railway**: $5 credit/month on free tier
-- **DigitalOcean**: $5/month for basic droplet
-- **AWS EC2**: t2.micro free for 12 months
-- **Google Cloud Run**: Pay per execution, very cost-effective
-
-## Best Practices
-
-1. **Use Environment Variables**: Never hardcode API keys
-2. **Set Reasonable Intervals**: 30-60 minutes is usually sufficient
-3. **Monitor Costs**: Keep an eye on API usage (YouTube, Notion, LLM)
-4. **Enable Logging**: Use cloud logging services for debugging
-5. **Set Up Alerts**: Configure alerts for errors or high usage
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Rate Limits**: Increase check interval if hitting limits
-2. **Memory Issues**: Use larger instance sizes if needed
-3. **Connection Timeouts**: Ensure proper network configuration
-4. **Missing Dependencies**: Update requirements.txt regularly
-
-### Debug Commands
-
+### Cloud Scheduler (Google Cloud)
 ```bash
-# Test locally with production config
-export $(cat .env | xargs) && python main_database.py --once
+# Every 6 hours
+--schedule="0 */6 * * *"
 
-# Check environment variables
-printenv | grep -E "(YOUTUBE|NOTION|ANTHROPIC|OPENAI)"
+# Every day at 2 AM UTC  
+--schedule="0 2 * * *"
 
-# Test database connection
-python -c "from src.database.models import Database; db = Database('sqlite:///./transcripts.db'); print('DB OK')"
+# Every weekday at 9 AM
+--schedule="0 9 * * 1-5"
 ```
 
-## Security Notes
+### Cron Jobs (Linux/Unix)
+```bash
+# Edit crontab
+crontab -e
 
-1. Use secrets management services when available
-2. Restrict API permissions to minimum required
-3. Enable 2FA on all cloud accounts
-4. Regularly rotate API keys
-5. Use VPC/private networks where possible
+# Add daily execution at 2 AM
+0 2 * * * cd /path/to/project && python main_database.py --once
+```
+
+## ⚡ Performance Optimization
+
+### Batch Processing
+- **Cloud Run**: 15 videos per execution (optimized for 60-minute timeout)
+- **Heroku**: 5-10 videos per batch (shorter dyno limits)
+- **Local/VPS**: No limit (depends on available resources)
+
+### Memory Usage
+- **Minimum**: 1Gi (recommended)
+- **Large batches**: 2Gi+ for processing many videos
+- **Transcript caching**: Reduces memory usage for re-processing
+
+### Cost Optimization
+- Use **Cloud Run Jobs** for scheduled processing (pay per execution)
+- Set appropriate batch sizes to prevent timeouts
+- Monitor Claude 3 Opus costs (~$0.86 per video)
+- Cache transcripts locally to avoid re-extraction
+
+---
+
+**Recommended Setup**: Google Cloud Run Jobs with daily scheduling provides the best balance of cost, reliability, and ease of management for automated video processing.
