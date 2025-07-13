@@ -7,7 +7,9 @@ comprehensive AI-powered summaries using Claude 3 Opus.
 """
 
 import logging
+import os
 import sys
+import time
 from typing import Optional, Dict
 from datetime import datetime
 
@@ -62,7 +64,8 @@ class VideoProcessor:
         self.transcript_extractor = TranscriptExtractor()
         
         # Use multi-part summarizer for comprehensive analysis
-        self.summarizer = MultiPartSummarizer(settings.anthropic_api_key)
+        # Use configurable delay between API calls to prevent overload
+        self.summarizer = MultiPartSummarizer(settings.anthropic_api_key, api_delay=settings.api_call_delay)
         
         # Storage components
         self.notion_client = NotionDatabaseClient(settings.notion_token, settings.notion_database_id)
@@ -244,8 +247,52 @@ class VideoProcessor:
             logger.error(f"Error processing playlist: {str(e)}")
             return {'success': False, 'error': str(e), 'added': 0, 'skipped': 0, 'total': 0}
 
-    def check_and_process_videos(self, force_reprocess: bool = False):
+    def check_api_health(self) -> dict:
+        """Check Claude API health before processing."""
+        try:
+            from anthropic import Anthropic
+            client = Anthropic(api_key=settings.anthropic_api_key)
+            
+            start_time = time.time()
+            response = client.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=50,
+                temperature=0,
+                messages=[{"role": "user", "content": "Respond with: OK"}]
+            )
+            elapsed = time.time() - start_time
+            
+            if elapsed < 5:
+                return {"status": "healthy", "delay": elapsed}
+            else:
+                return {"status": "slow", "delay": elapsed}
+                
+        except Exception as e:
+            if "overloaded" in str(e).lower() or "529" in str(e):
+                return {"status": "overloaded", "error": str(e)}
+            return {"status": "error", "error": str(e)}
+    
+    def check_and_process_videos(self, force_reprocess: bool = False, check_health: bool = True):
         """Main processing loop - check for new videos and process them."""
+        
+        # Check API health first (unless disabled)
+        if check_health:
+            logger.info("\n🏥 Checking API health...")
+            health = self.check_api_health()
+            
+            if health["status"] == "overloaded":
+                logger.warning("⚠️  API is overloaded. Skipping processing.")
+                logger.warning("Try again in 30-60 minutes.")
+                return
+            elif health["status"] == "error":
+                logger.error(f"API error: {health.get('error', 'Unknown')}")
+                return
+            elif health["status"] == "slow":
+                logger.warning(f"API is slow (response time: {health['delay']:.1f}s)")
+                logger.warning("Processing will continue but expect delays.")
+            else:
+                logger.info(f"✅ API is healthy (response time: {health['delay']:.1f}s)")
+        
         logger.info("\nChecking for new videos in Notion...")
         
         try:
@@ -284,18 +331,33 @@ class VideoProcessor:
                 else:  # None means skipped due to rate limits
                     stats['skipped'] += 1
                 
-                # For large batches, add delay between videos to avoid rate limits
-                if is_large_batch and i < len(unprocessed_videos) - 1:
+                # Always add delay between videos to avoid rate limits
+                if i < len(unprocessed_videos) - 1:
                     import time
-                    delay = 2 if stats['errors'] == 0 else min(5 + stats['errors'], 15)
+                    # Very conservative adaptive delay based on success/error rate
+                    if stats['errors'] == 0:
+                        delay = settings.video_processing_delay  # Base delay when no errors
+                    elif stats['errors'] <= 1:
+                        delay = settings.video_processing_delay * 2  # Double delay with 1 error
+                    elif stats['errors'] <= 2:
+                        delay = settings.video_processing_delay * 3  # Triple delay with 2 errors
+                    else:
+                        # Much longer delay with many errors
+                        delay = min(
+                            settings.video_processing_delay * 5 + (stats['errors'] * settings.error_backoff_multiplier), 
+                            settings.max_processing_delay
+                        )
+                    
                     logger.info(f"   Waiting {delay}s before next video...")
                     time.sleep(delay)
                 
-                # If we hit multiple rate limit errors, suggest pausing
-                if stats['errors'] >= 3 and stats['errors'] > stats['processed']:
+                # Stop processing immediately after first error during API overload periods
+                if stats['errors'] >= 1:
                     remaining = len(unprocessed_videos) - i - 1
                     if remaining > 0:
-                        logger.warning(f"\nHitting rate limits frequently. Consider running again later to process remaining {remaining} videos.")
+                        logger.warning(f"\n⚠️ API overload detected after {stats['errors']} error(s). Stopping to prevent cascading failures.")
+                        logger.warning(f"Remaining {remaining} videos will be processed when API stabilizes.")
+                        logger.warning(f"Suggestion: Try again in 30-60 minutes when API load decreases.")
                         break
             
             # Final summary
@@ -453,10 +515,12 @@ def main():
             # Run continuously
             if args.interval:
                 interval_hours = args.interval / 60.0
-                logger.info(f"\nStarting continuous monitor (checking every {args.interval} minutes)")
+                interval_minutes = int(interval_hours * 60)
+                logger.info(f"\nStarting continuous monitor (checking every {interval_minutes} minutes)")
             else:
                 interval_hours = settings.check_interval_hours
-                logger.info(f"\nStarting continuous monitor (checking every {interval_hours} hours)")
+                interval_minutes = int(interval_hours * 60)
+                logger.info(f"\nStarting continuous monitor (checking every {interval_minutes} minutes)")
             
             scheduler = TranscriptScheduler(
                 check_function=lambda: processor.check_and_process_videos(force_reprocess=args.reprocess),

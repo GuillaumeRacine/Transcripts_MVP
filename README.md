@@ -6,11 +6,13 @@ An automated Python application that monitors your Notion database for YouTube v
 
 - **Comprehensive AI Summaries**: Generates 1,200-1,500 word detailed summaries using Claude 3 Opus
 - **Multi-Part Analysis**: Strategic overview, detailed insights, and implementation guidance
-- **24/7 Automation**: Runs scheduled jobs to process new videos continuously  
+- **15-Minute Intervals**: Runs scheduled checks every 15 minutes for new videos  
+- **API Health Checks**: Automatic health monitoring before processing
+- **Circuit Breaker**: Prevents cascading failures during API overload  
 - **Smart Batching**: Cloud-optimized processing to prevent timeouts
 - **Cost Tracking**: Shows estimated costs for each video processed (~$0.86-$1.19 per video)
 - **Playlist Support**: Automatically detects and expands YouTube playlists
-- **Robust Error Handling**: Exponential backoff and retry logic for API overloads
+- **Ultra-Robust Error Handling**: 30s-960s exponential backoff with circuit breaker
 
 ## 🚀 Quick Start
 
@@ -40,11 +42,17 @@ An automated Python application that monitors your Notion database for YouTube v
 
 3. **Run the application**
    ```bash
-   # Process videos once
+   # Process videos once (with automatic API health check)
    python main_database.py --once
    
-   # Run continuously (24 hour intervals)
+   # Run continuously (checks every 15 minutes)
    python main_database.py
+   
+   # Process specific number of videos
+   python main_database.py --once --max-videos 5
+   
+   # Process playlist and add to database
+   python main_database.py --playlist "https://youtube.com/playlist?list=..."
    ```
 
 ## 🏗️ Architecture
@@ -181,11 +189,13 @@ python scripts/debug_database.py      # View database contents
 python scripts/rate_limit_status.py   # Check API usage
 ```
 
-### Testing
+### Rate Limiting Configuration
 ```bash
-python tests/test_single_video.py     # Test single video
-python tests/test_notion_only.py      # Test Notion connection
-python tests/test_integration.py      # Full integration test
+# Add to .env file for customized rate limiting
+API_CALL_DELAY=10.0                   # Delay between API calls (seconds)
+VIDEO_PROCESSING_DELAY=60              # Base delay between videos (seconds)
+ERROR_BACKOFF_MULTIPLIER=30            # Additional delay per error (seconds)
+MAX_PROCESSING_DELAY=600               # Maximum delay cap (seconds)
 ```
 
 ## 🔍 Monitoring
@@ -206,8 +216,8 @@ python tests/test_integration.py      # Full integration test
 
 ### Getting Help
 1. Check logs: `tail -f transcripts_app.log`
-2. Verify setup: Run test scripts in `tests/`
-3. Review documentation in `docs/`
+2. Quick start guide: `QUICK_START.md`
+3. View processed videos: `python scripts/debug_database.py`
 
 ---
 

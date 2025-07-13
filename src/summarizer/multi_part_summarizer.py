@@ -8,18 +8,26 @@ from typing import Optional, Dict, Any
 from anthropic import Anthropic
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
 class MultiPartSummarizer:
     """Generates comprehensive summaries using multiple AI calls and saves as markdown."""
     
-    def __init__(self, api_key: str, model: str = "claude-3-opus-20240229"):
+    def __init__(self, api_key: str, model: str = "claude-3-5-sonnet-20241022", api_delay: float = 10.0):
         self.client = Anthropic(api_key=api_key)
         self.model = model
         self.output_dir = "summaries"
         os.makedirs(self.output_dir, exist_ok=True)
+        self.api_delay = api_delay  # Delay between API calls in seconds
+        self.last_api_call_time = 0
+        
+        # Circuit breaker for overload protection
+        self.consecutive_failures = 0
+        self.last_failure_time = None
+        self.circuit_breaker_threshold = 3  # Open circuit after 3 consecutive failures
+        self.circuit_breaker_timeout = 300  # 5 minutes before trying again
     
     def generate_comprehensive_summary(self, transcript: str, video_metadata: Optional[Dict[str, Any]] = None) -> str:
         """Generate a comprehensive multi-part summary."""
@@ -76,8 +84,38 @@ Write with sophisticated analysis and concrete examples. Be specific, detailed, 
         
         return self._make_api_call(system_prompt, user_prompt, "Part 1")
     
-    def _make_api_call(self, system_prompt: str, user_prompt: str, part_name: str, max_retries: int = 5) -> str:
-        """Make API call with robust retry logic for overloaded errors."""
+    def _check_circuit_breaker(self) -> bool:
+        """Check if circuit breaker is open due to consecutive failures."""
+        if self.consecutive_failures >= self.circuit_breaker_threshold:
+            if self.last_failure_time:
+                time_since_failure = time.time() - self.last_failure_time
+                if time_since_failure < self.circuit_breaker_timeout:
+                    remaining = self.circuit_breaker_timeout - time_since_failure
+                    logger.warning(f"   ⚠️ Circuit breaker OPEN - too many consecutive failures. Wait {remaining:.0f}s before retry.")
+                    return True
+                else:
+                    # Reset circuit breaker after timeout
+                    logger.info(f"   🔄 Circuit breaker timeout expired - resetting failure count")
+                    self.consecutive_failures = 0
+                    self.last_failure_time = None
+        return False
+
+    def _make_api_call(self, system_prompt: str, user_prompt: str, part_name: str, max_retries: int = 6) -> str:
+        """Make API call with circuit breaker and adaptive backoff for overloaded errors."""
+        
+        # Check circuit breaker
+        if self._check_circuit_breaker():
+            raise Exception(f"Circuit breaker open - API consistently overloaded")
+        
+        # Implement proactive rate limiting with adaptive delay based on recent failures
+        current_time = time.time()
+        adaptive_delay = self.api_delay + (self.consecutive_failures * 10)  # Add 10s per recent failure
+        time_since_last_call = current_time - self.last_api_call_time
+        
+        if time_since_last_call < adaptive_delay:
+            wait_time = adaptive_delay - time_since_last_call
+            logger.info(f"   ⏱️  Adaptive rate limiting: waiting {wait_time:.1f}s (base: {self.api_delay}s + {self.consecutive_failures * 10}s for failures)...")
+            time.sleep(wait_time)
         
         for attempt in range(max_retries):
             try:
@@ -89,22 +127,38 @@ Write with sophisticated analysis and concrete examples. Be specific, detailed, 
                     messages=[{"role": "user", "content": user_prompt}]
                 )
                 
+                # Success - reset circuit breaker
+                self.consecutive_failures = 0
+                self.last_failure_time = None
+                
                 logger.info(f"   ✅ {part_name} generated successfully")
+                self.last_api_call_time = time.time()
                 return response.content[0].text
                 
             except Exception as e:
-                if "overloaded" in str(e).lower() or "529" in str(e):
-                    wait_time = (2 ** attempt) + 1  # Exponential backoff: 3, 5, 9, 17, 33 seconds
+                if "overloaded" in str(e).lower() or "529" in str(e) or "rate" in str(e).lower():
+                    # Ultra-conservative exponential backoff: 30, 60, 120, 240, 480, 960 seconds
+                    wait_time = 30 * (2 ** attempt)
                     logger.warning(f"   ⚠️ {part_name} overloaded (attempt {attempt + 1}/{max_retries}), waiting {wait_time}s...")
+                    
+                    # If we're past attempt 3, suggest the user try later
+                    if attempt >= 3:
+                        logger.warning(f"   ⚠️ API severely overloaded - consider trying again in 30+ minutes")
+                    
                     time.sleep(wait_time)
                     continue
                 else:
                     logger.error(f"   ❌ {part_name} failed: {str(e)}")
                     raise
         
-        # If all retries failed
-        logger.error(f"   ❌ {part_name} failed after {max_retries} attempts - Anthropic overloaded")
-        raise Exception(f"Claude API overloaded after {max_retries} attempts")
+        # All retries failed - update circuit breaker
+        self.consecutive_failures += 1
+        self.last_failure_time = time.time()
+        
+        logger.error(f"   ❌ {part_name} failed after {max_retries} attempts - API severely overloaded")
+        logger.error(f"   ❌ Consecutive failures: {self.consecutive_failures}/{self.circuit_breaker_threshold}")
+        
+        raise Exception(f"Claude API severely overloaded after {max_retries} attempts - try again later")
     
     def _generate_part2(self, transcript: str, video_metadata: Optional[Dict[str, Any]] = None) -> str:
         """Generate detailed analysis and key takeaways."""
